@@ -1,0 +1,291 @@
+---
+title: "175 Project Jeffrey Chan"
+output: pdf_document
+---
+
+In this project we will analyze the UIS UMARU Impact study data.  The data are measurements
+from a drug treatment study.  The data take the form of survival data with the quantity
+of interest being the time until Return to Drug Use (Time data).  The covariates
+recorded are the age of the subject; their Beck depression score at admission;
+whether they used heroin, cocaine, neither or both in the 3 months prior to 
+admission; their history of intravenous drug use at admission; the number of
+prior treatments a subject had received; the race (recorded only as White or other);
+a treatment randomization assignment (Long or Short); their treatment site (A or B);
+the length of treatment; and whether they returned to drug use (event of interest)
+or were censored from the study.  These data are recorded for 628 patients.
+
+The study had two main scientific questions: Does the treatment site have a significant effect on hazard rate? Does the treatment length have a significant effect on hazard rate?  (The original study also examined what effect the treatments had on HIV-risk behavior, but we will not consider this portion of their data.) The treatment sites A and B used different approaches; one was a "traditional therapeutic community" (site B) and the other was a modified therepeutic community with an emphasis on relapse prevention and health education (site A).  The lengths of treatments were also different: at the traditional site (site B) the short treatment was 6 months and the long treatment was 12 months; at the modified site (site A) the short treatment was 3 months and the long treatment was 6 months.  The treatment randomization assignment is recorded as either "Long" or "Short," with "Long" meaning either 6 months at site A or 12 months at site B and "Short" meaning either 3 months at site A or 6 months at site B.  
+
+Not all patients remained for the entire duration of their assigned treatment, so there is a covariate "Length of Stay" recording how long they stayed.  We note that the "Time" measurement is the number of days from entry into the program until drug relapse (or censoring at end of study).  For some patients "Time" and "Length of Stay" are equal, indicating that the patient returned to drug use and left the program simultaneously.  For most of our analysis we will treat "Time" (meaning days since entry into a treatment program) as the event time.  The authors of the study did so as well.  This makes sense because even during their treatment phase the patients could leave the program and return to drug use, as some do, so days spent in treatment should be counted towards the failure time.  On the other hand, one might argue that in the treatment community the patients have less access to drugs and so are less likely to relapse, making the real failure time of interest the number of days between exiting the program and returning to drug use.  We will consider this question as well, but the majority of our report follows the study authors' decision to use time from entry as the failure time.
+
+The most basic scientific question we wish to answer is: Which of the covariates has a statistically 
+significant effect on survival probability? Our question of primary interest is: What effect does the treatment assignment have on survival probability?  (We will use the term "survival" in a broad sense, keeping in mind that the event of interest is not death but rather relapse to drug use).  The primary statistical tools we will use to study the data are Kaplan-Meier estimates for survival curves, log-rank tests for comparison of survival curves, and Cox proportional hazard models for the impact of given covariates on the hazard rate.
+
+If we had designed this study we would have decided in advance which statistical tests we would apply to the data.  Making these decisions prior to data collection reduces the risk of "fishing" for a test that delivers a desired outcome, and thus reduces the risk of bias in one's analysis.  However, since we did not design the study or collect the data ourselves, we have no choice but to perform a post hoc statistical analysis.  To attempt to compensate for this shortcoming we will follow what seems to be a fairly unbiased way of choosing which statistical tests to perform:
+
+First we perform a basic analysis using only Kaplan-Meier curves and log-rank tests to try to identify the covariates that have a significant effect on survival probability and merit closer inspection.  We begin by plotting the various KM estimates of survival stratified by the values of each covariate.  This gives some visual indication of how important a covariate is for predicting survival probability.  To be more quantitative we will compare confidence intervals for median survival times and perform log-rank tests for each covariate.  We remind the reader that the log-rank test examines the null hypothesis that there is no difference in the overall survival curves for each value of the covariate.  We set our significance level to 5% for rejecting the null hypothesis.  For the covariates age, Beck score and number of prior treatments we will group observations into quartiles in order to maintain large enough groups for the log-rank test.
+
+In the second portion of the report we will refine our analysis of the effect of the covariates that we identify as significant.  Any covariates whose log-rank test rejects the null hypothesis will be considered potentially significant for predicting the hazard rate.  Each of these will be fitted to a Cox proportional hazards (PH) model.  The treatment variable is special: since one of the presumed goals of this study was to determine the treatment's effectiveness we will give this variable preferential treatment.  Regardless of the outcome of its log-rank test we will examine the treatment variable further in the second portion of the report.  Specifically, we will examine Cox PH models for each significant covariate together with the treatment variable to examine whether the treatment assignment remains significant after controlling for the effects of other covariates. At this point we will also examine a Cox PH model with all covariates that passed our significance test simultaneously to try to identify those which have the most important effect.  Each Cox PH model will be accompanied with a test of the proportional hazards assumption using Schoenfeld residuals.  Those covariates which significantly violate the proportional hazards assumption will be re-examined using a stratified Cox model to assess their effect on the hazard rate.  
+
+In the final section we will summarize our findings.  
+
+Section 1.
+
+Below we present Kaplan-Meier estimates for the survival probability stratified by each of the covariates.  In a few cases we encounter missing measurements.  Specifically, for 18 patients the history of heroin and/or cocaine use as well as the history of intravenous drug use is unavailable; for 6 patients the race is unavailable; for 5 patients the age is unavailable; for 17 patients the number of previous drug treatments is unavailable; for 33 patients the Beck score is unavailable.  While it seems reasonable to fill in missing ages, Beck scores, and number of previous drug treatments with their median values, it is unclear what a median history of drug use or median race would be.  So we chose to omit the patients whose history of drug use or race is missing from our analysis; this resulted in the omission of 24 of the original 628 patients.  Then the missing ages, Beck score and number of previous drug treatments were replaced by their median values among the remaining 604 patients.
+
+The dataset and various stratifications of the Kaplan-Meier estimates for the survival curve:
+
+```{r, Part 1}
+library("ggplot2")
+library("survival")
+library("survminer")
+
+drugs <- read.delim("/Users/jeffreychan/uis.txt",
+                    header = F, stringsAsFactors =F, sep ="")
+colnames(drugs)<-c("id","age","beck","hercoc","ivhx","ndrugtx","race","treat",
+                   "site","los","time","censor")
+
+drugs <- drugs[ -which(drugs$hercoc =="."), ]
+drugs <- drugs[ -which(drugs$race == "."), ]
+
+missingAge <- which(drugs$age == ".")
+medianAge <- median( as.numeric( drugs$age[ -missingAge ] ) )
+drugs$age[ missingAge ] <- as.character( medianAge )
+drugs$age <- as.numeric( drugs$age )
+drugs <- cbind(drugs, ageFactor= cut(drugs$age, quantile(drugs$age), include.lowest = T) )
+
+missingNdrugtx <- which(drugs$ndrugtx ==".")
+medianNdrugtx <- median( as.numeric( drugs$ndrugtx[-missingNdrugtx]))
+drugs$ndrugtx[ missingNdrugtx] <- as.character( medianNdrugtx )
+drugs$ndrugtx <- as.numeric( drugs$ndrugtx)
+drugs <- cbind(drugs, ndrugtxFactor = cut(drugs$ndrugtx, quantile(drugs$ndrugtx), include.lowest = T))
+
+missingBeck <- which(drugs$beck == ".")
+medianBeck <- median( as.numeric( drugs$beck[-missingBeck]))
+drugs$beck[ missingBeck] <- as.character( medianBeck )
+drugs$beck <-as.numeric( drugs$beck)
+drugs <- cbind(drugs, beckFactor = cut(drugs$beck, quantile(drugs$beck), include.lowest = T))
+
+surv.Obj <- Surv(drugs$time, drugs$censor)
+kmAll<- survfit(surv.Obj~1, data = drugs)
+ggsurvplot(kmAll,data=drugs,conf.int=T,surv.median.line = "hv",title="Kaplan-Meier estimate for \n 
+                    Drug Rehab. Study",xlab = "Time (days)")
+
+kmTreatment <- survfit( surv.Obj~drugs$treat, data=drugs)
+ggsurvplot(kmTreatment, data = drugs,conf.int=T,surv.median.line = "hv",legend.labs=c("Short Treatment","Long Treatment"),title = "KM Curves stratified by Treatment Group",xlab = "Time (Days)")
+survdiff( surv.Obj ~drugs$treat , data = drugs)
+
+kmHistory <- survfit( surv.Obj~ drugs$hercoc, data = drugs )
+ggsurvplot( kmHistory, data=drugs, conf.int=T,surv.median.line = "hv", title = "KM Curves stratified by History of Drug Use ", xlab = "Time (Days)",
+            legend.labs = c("Heroin & Cocaine", "Heroin Only","Cocaine Only","Neither Heroin nor Cocaine") )
+survdiff( surv.Obj ~drugs$hercoc , data = drugs)
+
+kmIVHistory <- survfit( surv.Obj~drugs$ivhx, data = drugs )
+ggsurvplot( kmIVHistory, data=drugs, conf.int=T,surv.median.line = "hv", title = "KM Curves stratified by History of IV Drug Use",
+             xlab = "Time (Days)", legend.labs = c("Never","Previous","Recent") )
+survdiff( surv.Obj ~drugs$ivhx , data = drugs)
+
+kmRace <- survfit( surv.Obj~drugs$race, data = drugs )
+ggsurvplot( kmRace, data = drugs, conf.int=T,surv.median.line = "hv", title= "KM Curves Stratified by Race", xlab = "Time (Days)",
+            legend.labs = c("White","Other") )
+survdiff( surv.Obj ~drugs$race , data = drugs)
+
+kmSite <- survfit( surv.Obj~drugs$site, data=drugs )
+ggsurvplot( kmSite, data = drugs, conf.int=T,surv.median.line = "hv", title="KM Curves Stratified by Treatment Site",
+            xlab = "Time (Days)", legend.labs = c("Site A","Site B"))
+survdiff( surv.Obj ~drugs$site , data = drugs)
+
+kmAge <- survfit( surv.Obj~drugs$ageFactor, data=drugs )
+ggsurvplot( kmAge, data = drugs, conf.int=T,surv.median.line = "hv", title="KM Curves Stratified by Age",
+            xlab = "Time (Days)", legend.labs = c("(20,27]","(27,32]","(32,36]","(36,56]" ))
+survdiff( surv.Obj ~drugs$ageFactor , data = drugs)
+
+kmNdrugtx <- survfit( surv.Obj~drugs$ndrugtxFactor, data=drugs )
+ggsurvplot( kmNdrugtx, data = drugs, conf.int=T,surv.median.line = "hv", title="KM Curves Stratified by
+            \n Number of Previous Drug Treatments",
+            xlab = "Time (Days)", legend.labs = c("(0,1]","(1,3]","(3,6]","(6,40]" ))
+survdiff( surv.Obj ~drugs$ndrugtxFactor , data = drugs)
+
+kmBeck <- survfit( surv.Obj~drugs$beckFactor, data=drugs )
+ggsurvplot( kmBeck, data = drugs, conf.int=T,surv.median.line = "hv", title="KM Curves Stratified by Beck Score",
+            xlab = "Time (Days)", legend.labs = c("(0,10]","(10,17]","(17,23]","(23,54]" ))
+survdiff( surv.Obj ~drugs$beckFactor , data = drugs)
+```
+
+Following our decision to use a 5% significance level for the log-rank test, we conclude that the following covariates have a significant effect on the survival curves: treatment assignment, history of heroin and/or cocaine use, history of intravenous drug use, race, and number of prior drug treatments. We will analyze their effects further.  Although treatment site does not pass the log-rank test for significance we will include it in our later analysis because one of our primary scientific questions was whether it has a significant effect.  (We will find that it does not.)
+
+The continuous variables age and Beck score do not meet our threshold for significance.  Looking at the Kaplan-Meier curves, one is tempted to regroup the data and repeat the analysis.  For example, it looks like a Beck score of at least 23 results in a significantly higher curve, as does an age of 28 - 32 years.  However we will not regroup the patients and repeat the analysis since we feel that this would be an instance of "p-value fishing."  So our further analysis will focus only on the variables that passed our original threshold of 5% significance.
+
+For these significant covariates it is interesting to compare the 95% confidence intervals for their median survival times to get a sense of which values of the covariate improve the outcome.
+```{r, Part 1 cont}
+summary(kmTreatment)$table
+summary(kmHistory)$table
+summary(kmIVHistory)$table
+summary(kmRace)$table
+summary(kmNdrugtx)$table
+```
+So the basic trends are these: the long treatment group has a significantly longer median time to relapse than the short treatment group.  The patients who have used heroin and cocaine have a similar median time to relapse as those who have used heroin only; the patients who have used cocaine only have a similar median time to relapse as those who have used neither heroin nor cocaine; patients who have used heroin appear to have a shorter median time to relapse than those who have not used heroin (though the 95% confidence intervals for the medians do overlap).  The median time to relapse for white patients is shorter than that of non-white patients, though again the 95% confidence intervals do overlap.  The median time to relapse for patients who have had 3 or fewer prior drug treatments is longer than that of patients who have had more than 3 prior drug treatments, though again the 95% confidence intervals overlap.
+
+Section 2.
+
+In this section we look at Cox proportional hazard models for the significant covariates from the previous section.  We start with each of the univariate Cox PH tests, first showing the R output and then explaining it for each covariate.
+
+```{r, Part 2 treat}
+
+coxTreat <- coxph( surv.Obj~treat, data = drugs)
+summary(coxTreat)
+cox.zph(coxTreat)
+```
+The univariate Cox PH model for the treatment group indicates that there is a significant difference (p=0.006) between the Short and Long treatment groups, with the Long treatment group having a lower hazard rate than the short treatment group.  The 95% confidence interval for the hazard ratio is [0.65, 0.93].  The test statistic for the proportional hazards assumption is not large enough to reject the PH assumption at the 5% significance level, so a Cox PH model is justified for this covariate.
+
+```{r, Part 2 hercoc}
+coxHistory <- coxph( surv.Obj~hercoc, data = drugs)
+summary(coxHistory)
+cox.zph(coxHistory)
+```
+The univariate Cox PH model for the history of heroin and cocaine is less easily interpreted.  We find that compared to the reference state of having used both heroin and cocaine, only the state "cocaine only" has a significantly different hazard ratio.  That is, we can say with 95% confidence that the hazard rate of individuals who used only cocaine in the past is lower than that of individuals who have used both heroin and cocaine.  However, the 95% confidence interval is [0.58,0.99], which nearly includes the value 1, so this is not a very strong conclusion.  Its p-value is 0.045, which is only barely significant. For the other two states (having used heroin only and having used neither heroin nor cocaine before) we find that the 95% confidence intervals contain the value 1 and the p-values are too large to make a meaningful comparison of the hazard rates for these groups compared to individuals who have used both heroin and cocaine.  
+
+The test statistic for the proportional hazards assumption is not large enough to reject the PH assumption at the 5% significance level, so a Cox PH model is justified for this covariate.
+
+```{r, Part 2 ivhx}
+coxIVHistory <- coxph( surv.Obj~ivhx, data = drugs)
+summary(coxIVHistory)
+cox.zph(coxIVHistory)
+```
+The univariate Cox PH model for the history of intravenous drug use indicates that compared to the reference hazard rate of individuals who have never used intravenous drugs, only the hazard rate of individuals who have recently used intravenous drugs is significantly different.  For those individuals who recently used intravenous drugs the 95% confidence interval for their hazard ratio compared to individuals who have never used IV drugs is [1.2,1.8], indicating that they have a higher hazard rate.  We cannot say the same for individuals who have previously but not recently used intravenous drugs: the 95% confidence interval for their hazard ratio compared to the reference is [0.95, 1.6], which includes the value 1.
+
+The test statistic for the proportional hazards assumption is not large enough to reject the PH assumption at the 5% significance level, so a Cox PH model is justified for this covariate.
+
+```{r, Part 2 race}
+coxRace <- coxph( surv.Obj~race, data = drugs)
+summary(coxRace)
+cox.zph(coxRace)
+```
+The univariate Cox PH model for race indicates that non-white patients have a significantly lower hazard rate than white patients.  The 95% confidence interval indicates that their hazard rate is at most 0.92 times the hazard rate of white patients, with a point estimate of 0.74.  
+
+The test statistic for the proportional hazards assumption is not large enough to reject the PH assumption at the 5% significance level, so a Cox PH model is justified for this covariate
+
+```{r, Part 2 ndrugTx}
+coxndrugtx <- coxph( surv.Obj~ndrugtxFactor, data = drugs)
+summary(coxndrugtx)
+cox.zph(coxndrugtx)
+
+```
+For the number of prior drug treatments the Cox PH model indicates that individuals who have had more than 3 prior drug treatments have a significantly higher hazard rate than the reference case of patients who have had at most 1 prior drug treatment.  The difference is not significant for individuals having had only 2 or 3 prior drug treatments (95% CI of [0.7,1.2]). For individuals with 4-6 prior drug treatments the hazard ratio compared to those with 0 or 1 prior drug treatments lies in the 95% confidence interval [1.03,1.69]. Between 7 and 40 prior treatments results in an even higher hazard ratio, lying in the 95% confidence interval [1.13, 1.88].  
+
+The test statistic for the proportional hazards assumption is not large enough to reject the PH assumption at the 5% significance level, so a Cox PH model is justified for this covariate.
+
+Now we would like to see which of these covariates remain significant in a multivariate Cox PH model.  There are many possible combinations, so we will focus on how the covariates interact with the treatment choice.  The question of whether the treatment choice is significant after controlling for other covariates is especially interesting because when a patient enters your clinic you can only choose which treatment to give them and you would like to know whether the longer (and presumably more expensive) treatment is better.
+
+We start by considering a series of Cox PH models with only the treatment variable and one other significant variable, then we select an appropriate multivariate model using likelihood ratio testing.  (We performed this analysis for treatment site together with other variables but we will not include it here to save space. The results are always that the treatment site is not significant.)
+
+
+```{r, Part 2 multiHercoc}
+coxTreatHercoc <- coxph( surv.Obj~treat+hercoc, data = drugs)
+summary(coxTreatHercoc)
+cox.zph(coxTreatHercoc)
+```
+As before, we find that only the treatment variable has a significant effect on the survival curve when only the treatment and drug history are included in the model.  Performing a likelihood ratio test to determine whether drug history significantly improves the model we find a test statistic of 16.11 - 7.68 = 8.43 with 3 degrees of freedom; this corresponds to a p-value of 0.04, which indicates that there is a significant improvement in the model that uses both treatment and drug history over the model that uses only treatment.
+
+(Question: How do we interpret that result? The likelihood ratio test says that we should include drug history in our model, but when we include it we don't find that its effect is significant.)
+
+```{r, Part 2 multiIV}
+coxTreatIV <- coxph( surv.Obj~treat+ivhx, data = drugs)
+summary(coxTreatIV)
+cox.zph(coxTreatIV)
+```
+In a Cox PH model that includes only the treatment variable and history of intravenous drug use we find two significant factors: the treatment and whether or not the patient recently used intravenous drugs.  We find that the long treatment decreases the hazard (hazard ratio in the CI [0.66,0.95]) and that having recently used intravenous drugs increases the hazard (hazard ratio in the CI [1.21,1.80]).  The proportional hazards assumption is not violated.  The likelihood ratio test has a statistic of 22.34 - 7.68 = 14.66 with 2 degrees of freedom, which corresponds to a p-value of 0.0007. This indicates that we should include the history of intravenous drug use in our model.
+
+```{r, Part 2 multiRace}
+coxTreatRace <- coxph( surv.Obj~treat+race, data = drugs)
+summary(coxTreatRace)
+cox.zph(coxTreatRace)
+```
+When taken together, race and treatment are both significant predictors of the hazard rate.  Receiving the long treatment and being non-white both decrease the hazard rate.  They have similar confidence intervals for the hazard ratio, roughly [0.6, 0.9].  The proportional hazards assumption is not significantly violated for these.  The likelihood ratio test has a statistic of 15.02 - 7.68 = 7.34  with 1 degree of freedom, which corresponds to a p-value of 0.007. This indicates that we should include race in our model.
+
+```{r, Part 2 multiNDrug}
+coxTreatNDrug <- coxph( surv.Obj~treat+ndrugtxFactor, data = drugs)
+summary(coxTreatNDrug)
+cox.zph(coxTreatNDrug)
+```
+Here again we find that both the treatment group and the number of prior drug treatments are significant when taken together in a Cox PH model.  As before, having had 2-3 prior treatments is not significantly different than having had 0-1, but having had 4 or more is significant, with 7 or more being especially significant.  The treatment group as well has a significant effect, with the long treatment still decreasing the hazard rate relative to the short treatment.  Again there is no significant violation of the proportional hazards assumption. The likelihood ratio test has a statistic of 22.9 - 7.68 = 15.22 with 3 degrees of freedom, which corresponds to a p-value of 0.002. This indicates that we should include the history of intravenous drug use in our model.
+
+
+```{r, Part 2 multi}
+coxAll <- coxph( surv.Obj~treat+site+hercoc+ivhx+race+ndrugtxFactor, data = drugs)
+summary(coxAll)
+cox.zph(coxAll)
+anova(coxAll)
+```
+The result is interesting: when controlling simultaneously for all the factors we identified as significant, the only one whose p-value (0.012) indicates significance is the treatment variable.  The 95% confidence interval for the hazard ratio of those individuals who received the long treatment is [0.66, 0.95], indicating that the long treatment results in a decreased hazard rate.  This could be taken as strong evidence that the long treatment is effective: when controlling for the effects of other covariates that can be shown to significantly affect the survival curve only the treatment variable can be shown to have a statistically significant effect. 
+
+We note that there is not strong evidence that the proportional hazards assumption is violated, so we are justified in applying a Cox PH model to these covariates.
+
+Although the other covariates do not appear to be significant predictors of hazard, the likelihood ratio tests performed in the analysis of deviance table indicate that each covariate improves the model significantly and should therefore be included.  However, this table is dependent on the order in which we list the variables, so we must check different permutations of the variables.  We will include only the most interesting one here:
+```{r,Part 2 anova}
+anova( coxph( surv.Obj~treat+site+ndrugtxFactor+race+hercoc+ivhx, data = drugs))
+```
+This indicates that after accounting for the treatment variable one should also account for the number of prior drug treatments and the race of the patient, but that after accounting for these there is no significant improvement to the model from including the treatment site, the history of heroin and cocaine use, or the history of IV drug use.  Checking the significance of these variables in different orders produced similar results, so it suggests that a sufficient model for our data is a Cox PH model that accounts for the treatment assignment, the number of previous drug treatments, and the race of the patient. 
+
+This model is given by
+
+```{r,Part 2 final model}
+coxModel <- coxph( surv.Obj~treat+ndrugtxFactor+race, data = drugs)
+summary(coxModel)
+cox.zph(coxModel)
+```
+We interpret this model as follows: when simltaneously accounting for treatment assignment, number of prior drug treatments, and race, each has a significant effect.  The long treatment group has a lower hazard rate: the 95% confidence interval for the hazard ratio of the long to short treatment groups is [0.66, 0.94].  For the number of prior drug treatments our baseline hazard rate is for those patients having had 0 or 1 prior drug treatment.  Patients with 2 or 3 prior treatments do not have a significantly different hazard rate: the 95% confidence interval for their hazard ratio is [0.75, 1.21].  Patients with 4-6 prior treatments have a higher hazard rate: the 95% confidence interval for their hazard ratio is [1.04, 1.71]; this is marginally significant.  Patients with more than 6 prior treatments have a significantly higher hazard rate: 95% confidence interval for their hazard ratio is [1.10, 1.83].  Finally, non-white patients have a lower hazard rate than white patients: the 95% confidence interval for their hazard ratio is [0.62, 0.95].  We note as well that the test of Schoenfeld residuals did not indicate any significant violations of the proportional hazards assumption.
+
+The key finding of our analysis is this: The treatment group (Short or Long) is a significant predictor of the hazard rate, regardless of what other covariates we control for.  Had we found, for example, that a cox PH model that accounts for treatment group and race does not find the treatment group to be significant then it would be difficult to argue that the long treatment group has a genuinely lower hazard rate than the short treatment group.  However, that is not the case: we find that the long treatment group has a lower hazard rate than the short treatment group, even when controlling for other significant factors.  In most cases the Cox PH models with treatment and one other covariate show both treatment and the other covariate to be significant.  In the case of treatment group together with history of heroin and cocaine use, we find that only the treatment group is significant.  We conclude that patients assigned to the long treatment group have a lower hazard rate (and so a longer expected time to relapse) than patients assigned to the short treatment group.
+
+Another significant finding is that the treatment site is not significant.  Our log-rank test from the previous section indicated already that this would be the case.  In this section we presented a univariate Cox PH test that shows that it is not significant.  We omitted some multivariate Cox PH tests that also found it not significant.  The likelihood ratio tests of the variables together all agree as well that the treatment site is not significant.  Therefore the study finds no significant difference between the two treatment sites.  Regardless of treatment site, we do find that the treatment group is significant.
+
+
+
+Section 3.
+
+Our finding in the previous sections was that the long treatment group has a lower hazard rate than the short treatment group.  This was supported by statistical evidence from a log-rank test and from Cox PH models that accounted for the effects of other variables.  This seems like strong evidence in favor of longer drug treatment programs.  
+
+However, as the authors of the study acknowledge, it could be that patients in the long treatment group have a lower hazard rate simply because they are less likely to return to drug use during the treatment itself.  It may be that they do not have a better outcome after leaving treatment.  To examine this question we analyze the survival curves where we use the number of days after leaving treatment as the failure time and see whether the long treatment group still has an advantage.
+
+```{r,Part 3}
+drugs <- cbind(drugs, timeAfter = drugs$time - drugs$los )
+surv.Obj2 <- Surv(time=drugs$timeAfter,event = drugs$censor)
+
+kmTreatment2 <- survfit( surv.Obj2~treat, data=drugs)
+ggsurvplot(kmTreatment2, data = drugs,conf.int=T,surv.median.line = "hv",legend.labs=c("Short Treatment","Long Treatment"),title = "KM Curves for Time After End of Treatment \n stratified by Treatment Group",xlab = "Time (Days)")
+survdiff( surv.Obj2 ~drugs$treat , data = drugs)
+```
+In terms of the number of days from the end of treatment to relapse, the difference between short and long treatments now appears much less significant.  The Kaplan-Meier estimates for these survival curves lie within each other's 95% confidence intervals and the log-rank test produces a p-value of 0.2, consistent with the null hypothesis that there is no difference between the two survival curves.
+
+We note that the curves drop very steeply in the beginning. That's because a total of 76 patients in the study left treatment because they returned to drug use, meaning that their time to failure after treatment was 0 days.  Of these, 31 belonged to the long treatment group and 45 to the short treatment group.  If we ignore these patients then we can look at the effect of the treatment length on patients who completed their treatment without returning to drug use.  This does not necessarily mean they completed the entire 3, 6, or 12-month stay; it simply means that they have more than 0 days between leaving treatment and returning to drug use.  In this case we find:
+```{r,Part 3 greater than 0}
+excluded <- which(drugs$timeAfter==0)
+drugsExclude <- data.frame(time = drugs$time[-excluded], censor=drugs$censor[-excluded], treat = drugs$treat[-excluded])
+surv.Obj3 <- Surv( drugsExclude$time, drugsExclude$censor)
+kmTreatment3 <- survfit( surv.Obj3~treat, data = drugsExclude)
+ggsurvplot(kmTreatment3, data = drugsExclude,conf.int=T,surv.median.line = "hv",legend.labs=c("Short Treatment","Long Treatment"),title = "KM Curves for Time After End of Treatment, \n Treatment Completed \n stratified by Treatment Group",xlab = "Time (Days)")
+survdiff( surv.Obj3 ~drugsExclude$treat , data = drugsExclude)
+summary(kmTreatment3)$table
+```
+
+Excluding the patients who left treatment because they returned to drug use, we again find that the patients in the long treatment group had a lower hazard rate.  The log-rank test is again significant (p=0.03) and the Kaplan-Meier estimates for median survival time in the short and long groups have confidence intervals of [143, 203] and [190, 259] days, respectively.  Though these intervals overlap they still indicate a longer median survival time for the long treatment group.  In a Cox PH model we can estimate the hazard ratio:
+```{r, Part 3 Cox}
+coxTreatAfter <- coxph( surv.Obj3~treat, data = drugsExclude)
+summary(coxTreatAfter)
+cox.zph(coxTreatAfter)
+```
+
+So after redefining the survival time to mean number of days after leaving treatment before return to drug use and after excluding patients who left because they returned to drug use while in treatment, we find that the long treatment group has a hazard ratio in the confidence interval [0.66, 0.97] compared to the short treatment group.  This indicates that they have a lower hazard rate, but it is not very strong evidence because this confidence interval nearly contains 1.  
+
+Conclusion:
+
+Our primary questions were about the effectiveness of the treatment site and treatment assignment.  Every test we performed indicates that the treatment site does not have a significant impact on the hazard rate.  We did find evidence that patients assigned to a long treatment have a lower hazard rate than patients in the short treatment group, with a hazard ratio of between 0.66 and 0.94 after accounting for race and the number of prior drug treatments, which we found were the other two most significant predictors of hazard rate.  
+
+That analysis was based on the number of days from entering the program to return to drug use.  This is a fine way to measure the success of a drug treatment program, but one might prefer to measure success according to how long after leaving treatment a patient returns to drug use.  By this metric the results are less clear.  When we examine this time for all patients we no longer find a significant difference in the survival curves.  When we exclude patients who returned to drug use while in treatment (whose failure time would be 0 days by this definition) then we again find an advantage for the long treatment group, but it is less convincing than the analysis for the original definition of survival time.  
+
+References:
+
+McCusker J, Bigelow C, Frost R, Garfield F, Hindin R, Vickers-Lahti M, Lewis B 1997. The effects of planned duration of residential drug abuse treatment on recovery and HIV risk behavior. American Journal of Public Health 87(10):1637-1644.
+
+
